@@ -1,4 +1,5 @@
 services:
+
   namenode:
     image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
     container_name: namenode
@@ -34,8 +35,8 @@ services:
       - HDFS_CONF_dfs_replication=1
       - HDFS_CONF_dfs_permissions_enabled=false
 
-    ports:
-      - "9864:9864"
+    depends_on:
+      - namenode
 
     volumes:
       - datanode_data:/hadoop/dfs/data
@@ -43,9 +44,53 @@ services:
     networks:
       - bigdata-net
 
+
+  generator:
+    build:
+      context: ./src/generator
+      dockerfile: Dockerfile
+
+    container_name: ecommerce-generator
+    hostname: generator
+    restart: unless-stopped
+
+    volumes:
+      - logs_data:/var/log/myapp
+
+    networks:
+      - bigdata-net
+
+
+  flume:
+    build:
+      context: ./flume
+      dockerfile: Dockerfile
+
+    container_name: flume
+    hostname: flume
+    restart: unless-stopped
+
+    depends_on:
+      - namenode
+      - generator
+
+    volumes:
+      - logs_data:/var/log/myapp
+      - flume_state:/var/lib/flume
+
+    networks:
+      - bigdata-net
+
+
 volumes:
+
   namenode_data:
   datanode_data:
+  logs_data:
+  flume_state:
+
 
 networks:
+
   bigdata-net:
+    driver: bridge
