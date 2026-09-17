@@ -44,9 +44,13 @@ COPY flume.config /opt/flume/conf/flume.conf
 # ==================================================
 
 RUN mkdir -p \
-    /var/lib/flume/checkpoint \
-    /var/lib/flume/checkpoint-backup \
-    /var/lib/flume/data \
+    /var/lib/flume/checkpoint-hdfs \
+    /var/lib/flume/checkpoint-backup-hdfs \
+    /var/lib/flume/data-hdfs \
+    /var/lib/flume/checkpoint-flink \
+    /var/lib/flume/checkpoint-backup-flink \
+    /var/lib/flume/data-flink \
+    /var/lib/flink-input \
     /var/log/myapp
 
 # ==================================================
