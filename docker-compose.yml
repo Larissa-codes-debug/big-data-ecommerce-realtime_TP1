@@ -1,0 +1,96 @@
+services:
+
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    hostname: namenode
+    restart: unless-stopped
+
+    environment:
+      - CLUSTER_NAME=bigdata
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_permissions_enabled=false
+
+    ports:
+      - "9870:9870"
+      - "8020:8020"
+
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+
+    networks:
+      - bigdata-net
+
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    hostname: datanode
+    restart: unless-stopped
+
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_permissions_enabled=false
+
+    depends_on:
+      - namenode
+
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+
+    networks:
+      - bigdata-net
+
+
+  generator:
+    build:
+      context: ./src/generator
+      dockerfile: Dockerfile
+
+    container_name: ecommerce-generator
+    hostname: generator
+    restart: unless-stopped
+
+    volumes:
+      - logs_data:/var/log/myapp
+
+    networks:
+      - bigdata-net
+
+
+  flume:
+    build:
+      context: ./flume
+      dockerfile: Dockerfile
+
+    container_name: flume
+    hostname: flume
+    restart: unless-stopped
+
+    depends_on:
+      - namenode
+      - generator
+
+    volumes:
+      - logs_data:/var/log/myapp
+      - flume_state:/var/lib/flume
+
+    networks:
+      - bigdata-net
+
+
+volumes:
+
+  namenode_data:
+  datanode_data:
+  logs_data:
+  flume_state:
+
+
+networks:
+
+  bigdata-net:
+    driver: bridge
