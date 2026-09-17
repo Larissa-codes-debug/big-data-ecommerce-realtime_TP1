@@ -138,38 +138,6 @@ services:
     networks: [bigdata-net]
     restart: "no"
 
-  hive-metastore-postgresql:
-    image: bde2020/hive-metastore-postgresql:2.3.0
-    container_name: hive-metastore-postgresql
-    restart: unless-stopped
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks: [bigdata-net]
-
-  hive-metastore:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-metastore
-    restart: unless-stopped
-    environment:
-      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
-      - SERVICE_PRECONDITION=namenode:9870 hive-metastore-postgresql:5432
-    ports:
-      - "9083:9083"
-    depends_on: [namenode, hive-metastore-postgresql]
-    networks: [bigdata-net]
-
-  hive-server:
-    image: bde2020/hive:2.3.2-postgresql-metastore
-    container_name: hive-server
-    restart: unless-stopped
-    environment:
-      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
-      - SERVICE_PRECONDITION=hive-metastore:9083
-    ports:
-      - "10000:10000"
-      - "10002:10002"
-    depends_on: [hive-metastore]
-    networks: [bigdata-net]
 
 volumes:
   namenode_data:
