@@ -5,92 +5,181 @@ services:
     container_name: namenode
     hostname: namenode
     restart: unless-stopped
-
     environment:
       - CLUSTER_NAME=bigdata
       - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
       - HDFS_CONF_dfs_replication=1
       - HDFS_CONF_dfs_permissions_enabled=false
-
     ports:
       - "9870:9870"
       - "8020:8020"
-
     volumes:
       - namenode_data:/hadoop/dfs/name
-
-    networks:
-      - bigdata-net
-
+    networks: [bigdata-net]
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: datanode
     hostname: datanode
     restart: unless-stopped
-
     environment:
       - SERVICE_PRECONDITION=namenode:9870
       - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
       - HDFS_CONF_dfs_replication=1
       - HDFS_CONF_dfs_permissions_enabled=false
-
-    depends_on:
-      - namenode
-
+    depends_on: [namenode]
     volumes:
       - datanode_data:/hadoop/dfs/data
-
-    networks:
-      - bigdata-net
-
+    networks: [bigdata-net]
 
   generator:
     build:
       context: ./src/generator
       dockerfile: Dockerfile
-
     container_name: ecommerce-generator
     hostname: generator
     restart: unless-stopped
-
     volumes:
       - logs_data:/var/log/myapp
-
-    networks:
-      - bigdata-net
-
+    networks: [bigdata-net]
 
   flume:
     build:
       context: ./flume
       dockerfile: Dockerfile
-
     container_name: flume
     hostname: flume
     restart: unless-stopped
-
-    depends_on:
-      - namenode
-      - generator
-
+    depends_on: [namenode, generator]
     volumes:
       - logs_data:/var/log/myapp
       - flume_state:/var/lib/flume
+      - flink_input:/var/lib/flink-input
+    networks: [bigdata-net]
 
-    networks:
-      - bigdata-net
+  hbase:
+    build:
+      context: ./hbase
+      dockerfile: Dockerfile
+    container_name: hbase
+    hostname: hbase
+    restart: unless-stopped
+    volumes:
+      - hbase_data:/data/hbase
+    ports:
+      - "16010:16010"
+      - "9090:9090"
+    networks: [bigdata-net]
 
+  hbase-init:
+    build:
+      context: ./hbase
+      dockerfile: Dockerfile
+    container_name: hbase-init
+    entrypoint: ["/bin/bash", "/init-hbase.sh"]
+    volumes:
+      - ./hbase/init-hbase.sh:/init-hbase.sh:ro
+    depends_on: [hbase]
+    networks: [bigdata-net]
+    restart: "no"
+
+  flink-jobmanager:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    command: jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+    ports:
+      - "8081:8081"
+    volumes:
+      - flink_input:/var/lib/flink-input
+    networks: [bigdata-net]
+    depends_on: [hbase-init]
+
+  flink-taskmanager:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-taskmanager
+    hostname: flink-taskmanager
+    command: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - HBASE_HOST=hbase
+      - HBASE_THRIFT_PORT=9090
+      - HBASE_TABLE=ecommerce_metrics
+      - FLINK_INPUT_DIR=/var/lib/flink-input
+    depends_on: [flink-jobmanager, hbase-init]
+    volumes:
+      - flink_input:/var/lib/flink-input
+    networks: [bigdata-net]
+
+  flink-submit:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-submit
+    environment:
+      - HBASE_HOST=hbase
+      - HBASE_THRIFT_PORT=9090
+      - HBASE_TABLE=ecommerce_metrics
+      - FLINK_INPUT_DIR=/var/lib/flink-input
+    depends_on: [flink-jobmanager, flink-taskmanager, hbase-init]
+    volumes:
+      - flink_input:/var/lib/flink-input
+    command: >-
+      bash -c 'until /opt/flink/bin/flink list -m flink-jobmanager:8081 >/dev/null 2>&1;
+      do echo "Aguardando JobManager..."; sleep 3; done;
+      /opt/flink/bin/flink run -m flink-jobmanager:8081 -pyexec python3 -pyclientexec python3 -py /opt/flink/job/flink_job.py;
+      sleep infinity'
+    networks: [bigdata-net]
+    restart: "no"
+
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: hive-metastore-postgresql
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [bigdata-net]
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-metastore
+    restart: unless-stopped
+    environment:
+      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - SERVICE_PRECONDITION=namenode:9870 hive-metastore-postgresql:5432
+    ports:
+      - "9083:9083"
+    depends_on: [namenode, hive-metastore-postgresql]
+    networks: [bigdata-net]
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: hive-server
+    restart: unless-stopped
+    environment:
+      - HIVE_CORE_CONF_javax_jdo_option_ConnectionURL=jdbc:postgresql://hive-metastore-postgresql/metastore
+      - SERVICE_PRECONDITION=hive-metastore:9083
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    depends_on: [hive-metastore]
+    networks: [bigdata-net]
 
 volumes:
-
   namenode_data:
   datanode_data:
   logs_data:
   flume_state:
-
+  flink_input:
+  hbase_data:
+  postgres_data:
 
 networks:
-
   bigdata-net:
     driver: bridge
