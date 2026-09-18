@@ -1,186 +1,115 @@
 """
 spark_etl.py
 ------------
-Frente Spark do pipeline (Bianca ).
+Frente Spark do pipeline (Bianca / "Pessoa 5").
 
-Le os eventos brutos gravados no HDFS (mesmo schema do gerador.py:
-click / cart / delivery_status), faz ETL em batch com operacoes de
-*wide dependency* (agregacoes com groupBy e um join, que forcam shuffle
-entre particoes) e grava o resultado em tabelas Hive para a Larissa
-consumir na camada de Data Warehouse.
+Le a tabela externa `raw_logs` (ja criada no Hive pela Larissa, apontando
+pra hdfs://namenode:8020/data/raw/ecommerce/logs/), faz o ETL em batch
+com uma agregacao de *wide dependency* (groupBy por product_id/category,
+que forca shuffle entre particoes) e grava o resultado na tabela Hive
+`product_metrics_batch` -- a mesma tabela/colunas que a Larissa ja
+definiu em hive/schema/ecommerce.sql, só que calculada pelo Spark em vez
+de HiveQL puro (é essa a diferenca que justifica a camada Spark na
+arquitetura: ETL feito em Spark, não direto no Hive).
 
-USO:
-    spark-submit spark_etl.py \
-        --input hdfs://namenode:8020/raw/events \
-        --hive-db colmeia
+USO (dentro do container/spark-submit):
+    spark-submit spark_etl.py
 
-Se --input ou --hive-db nao forem passados, usa os defaults abaixo.
-Ajuste DEFAULT_INPUT_PATH assim que confirmar o path real na pasta hdfs/.
+Nao precisa de argumentos: o path de entrada ja vem do Hive metastore
+(porque raw_logs é external table). Se quiser sobrescrever o database,
+use --hive-db.
 """
 
 import argparse
 
 from pyspark.sql import SparkSession, functions as F
-from pyspark.sql.types import (
-    StringType,
-    DoubleType,
-    IntegerType,
-    StructField,
-    StructType,
-)
-
-# ---------------------------------------------------------------------------
-# DEFAULTS — ajustar depois de confirmar com a pasta hdfs/ do repositório
-# ---------------------------------------------------------------------------
-DEFAULT_INPUT_PATH = "hdfs://namenode:8020/raw/events"
-DEFAULT_HIVE_DB = "colmeia"  # nome do banco Hive (pode trocar se a Larissa usar outro)
-
-# Schema explícito == mesmos campos do gerador.py (evita o Spark ter que
-# inferir o schema lendo o arquivo inteiro, que é lento e pode falhar
-# quando chegam campos nulos).
-EVENT_SCHEMA = StructType(
-    [
-        StructField("event_id", StringType(), True),
-        StructField("schema_version", StringType(), True),
-        StructField("event_type", StringType(), True),       # click | cart | delivery_status
-        StructField("event_time", StringType(), True),       # ISO8601 UTC
-        StructField("ingested_at", StringType(), True),       # ISO8601 UTC
-        StructField("source", StringType(), True),
-        StructField("user_id", StringType(), True),
-        StructField("session_id", StringType(), True),
-        StructField("product_id", StringType(), True),
-        StructField("category", StringType(), True),
-        StructField("quantity", IntegerType(), True),
-        StructField("unit_price", DoubleType(), True),
-        StructField("total_value", DoubleType(), True),
-        StructField("cart_action", StringType(), True),       # add | remove | checkout
-        StructField("order_id", StringType(), True),
-        StructField("delivery_status", StringType(), True),
-    ]
-)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ETL batch Spark -> Hive")
-    parser.add_argument("--input", default=DEFAULT_INPUT_PATH,
-                         help="caminho HDFS dos eventos brutos (JSONL)")
-    parser.add_argument("--hive-db", default=DEFAULT_HIVE_DB,
-                         help="database Hive de destino")
+    parser.add_argument(
+        "--hive-db",
+        default="default",
+        help="database Hive onde raw_logs/product_metrics_batch vivem (default: 'default')",
+    )
     return parser.parse_args()
 
 
-def load_events(spark: SparkSession, input_path: str):
-    """Le o JSONL bruto do HDFS, tipa as colunas e remove duplicados
-    (o event_id é único por definição no gerador)."""
+def carregar_raw_logs(spark: SparkSession, hive_db: str):
+    """Le a tabela externa raw_logs direto do Hive metastore (o Spark
+    enxerga o mesmo catalogo, por isso nao precisamos repetir o path
+    do HDFS aqui -- ele ja esta na definicao da tabela)."""
 
-    df = (
-        spark.read.schema(EVENT_SCHEMA)
-        .json(input_path)
-        .withColumn("event_time", F.to_timestamp("event_time"))
-        .withColumn("ingested_at", F.to_timestamp("ingested_at"))
-        .dropDuplicates(["event_id"])
-    )
-    return df
+    spark.sql(f"USE {hive_db}")
+    return spark.table("raw_logs")
 
 
-# ---------------------------------------------------------------------------
-# TRANSFORMACOES — cada uma abaixo tem pelo menos uma wide dependency
-# (groupBy ou join provocam shuffle: os dados são reparticionados pela
-# chave de agrupamento/junção, diferente de um map/filter que é narrow).
-# ---------------------------------------------------------------------------
+def calcular_product_metrics(df):
+    """WIDE DEPENDENCY: groupBy por (product_id, category) forca o Spark
+    a reparticionar e embaralhar (shuffle) os dados entre os executores
+    pela chave de agrupamento -- diferente de um select/filter (narrow),
+    que processa cada particao isoladamente."""
 
-def resumo_por_categoria(df):
-    """WIDE: groupBy + agregações -> shuffle por 'category'."""
-    cliques = df.filter(F.col("event_type") == "click")
-    vendas = df.filter(
-        (F.col("event_type") == "cart") & (F.col("cart_action") == "checkout")
-    )
-
-    cliques_por_cat = cliques.groupBy("category").agg(
-        F.count("*").alias("total_cliques")
-    )
-    vendas_por_cat = vendas.groupBy("category").agg(
-        F.count("*").alias("total_pedidos"),
-        F.sum("total_value").alias("receita_total"),
-        F.avg("total_value").alias("ticket_medio"),
-    )
-
-    return cliques_por_cat.join(vendas_por_cat, on="category", how="outer").fillna(0)
-
-
-def taxa_abandono_carrinho(df):
-    """WIDE: groupBy por session_id, depois outro groupBy por categoria."""
-    carrinho = df.filter(F.col("event_type") == "cart")
-
-    por_sessao = carrinho.groupBy("session_id", "category").agg(
-        F.max(F.when(F.col("cart_action") == "add", 1).otherwise(0)).alias("teve_add"),
-        F.max(F.when(F.col("cart_action") == "checkout", 1).otherwise(0)).alias("teve_checkout"),
-    )
-
-    resultado = por_sessao.groupBy("category").agg(
-        F.sum("teve_add").alias("sessoes_com_add"),
-        F.sum("teve_checkout").alias("sessoes_com_checkout"),
-    ).withColumn(
-        "taxa_abandono",
-        F.when(F.col("sessoes_com_add") > 0,
-               1 - (F.col("sessoes_com_checkout") / F.col("sessoes_com_add")))
-        .otherwise(F.lit(None)),
-    )
-    return resultado
-
-
-def funil_entrega(df):
-    """WIDE: groupBy simples por status."""
-    entregas = df.filter(F.col("event_type") == "delivery_status")
-    return entregas.groupBy("delivery_status").agg(
-        F.countDistinct("order_id").alias("total_pedidos")
+    return (
+        df.filter(F.col("product_id").isNotNull())
+        .groupBy("product_id", "category")
+        .agg(
+            F.sum(F.when(F.col("event_type") == "click", 1).otherwise(0)).alias(
+                "total_clicks"
+            ),
+            F.sum(
+                F.when(
+                    (F.col("event_type") == "cart") & (F.col("cart_action") == "add"),
+                    1,
+                ).otherwise(0)
+            ).alias("total_cart_adds"),
+            F.sum(
+                F.when(
+                    (F.col("event_type") == "cart")
+                    & (F.col("cart_action") == "checkout"),
+                    1,
+                ).otherwise(0)
+            ).alias("total_checkouts"),
+            F.sum(
+                F.when(
+                    (F.col("event_type") == "cart")
+                    & (F.col("cart_action") == "checkout"),
+                    F.col("total_value"),
+                ).otherwise(0.0)
+            ).alias("total_revenue"),
+            F.sum(
+                F.when(
+                    (F.col("event_type") == "delivery_status")
+                    & (F.col("delivery_status") == "delivered"),
+                    1,
+                ).otherwise(0)
+            ).alias("total_delivered"),
+        )
     )
 
 
-def pedidos_x_status_atual(df):
-    """WIDE: join entre pedidos (originados no cart/checkout) e o status
-    de entrega mais recente de cada order_id -> junção clássica com shuffle."""
-    pedidos = (
-        df.filter((F.col("event_type") == "cart") & (F.col("cart_action") == "checkout"))
-        .select("order_id", "user_id", "category", "total_value", "event_time")
-        .withColumnRenamed("event_time", "checkout_time")
-    )
-
-    status_recente = (
-        df.filter(F.col("event_type") == "delivery_status")
-        .groupBy("order_id")
-        .agg(F.max_by("delivery_status", "event_time").alias("status_atual"))
-    )
-
-    return pedidos.join(status_recente, on="order_id", how="left")
-
-
-def escrever_hive(df, spark: SparkSession, hive_db: str, tabela: str):
-    """Grava (overwrite) uma tabela Hive gerenciada dentro do database dado."""
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {hive_db}")
-    nome_completo = f"{hive_db}.{tabela}"
-    df.write.mode("overwrite").saveAsTable(nome_completo)
-    print(f"[spark_etl] tabela {nome_completo} escrita com {df.count()} linhas")
+def escrever_hive(df, spark: SparkSession, tabela: str):
+    """Sobrescreve a tabela Hive de destino com o resultado do Spark."""
+    df.write.mode("overwrite").saveAsTable(tabela)
+    print(f"[spark_etl] tabela '{tabela}' escrita com {df.count()} linhas")
 
 
 def main():
     args = parse_args()
 
     spark = (
-        SparkSession.builder.appName("ecommerce-realtime-etl")
+        SparkSession.builder.appName("ecommerce-product-metrics-etl")
         .enableHiveSupport()
         .getOrCreate()
     )
 
-    print(f"[spark_etl] lendo eventos de: {args.input}")
-    eventos = load_events(spark, args.input)
-    eventos.cache()
-    print(f"[spark_etl] total de eventos lidos: {eventos.count()}")
+    print("[spark_etl] lendo raw_logs do Hive metastore...")
+    raw_logs = carregar_raw_logs(spark, args.hive_db)
+    raw_logs.cache()
+    print(f"[spark_etl] total de linhas lidas em raw_logs: {raw_logs.count()}")
 
-    escrever_hive(resumo_por_categoria(eventos), spark, args.hive_db, "resumo_categoria")
-    escrever_hive(taxa_abandono_carrinho(eventos), spark, args.hive_db, "abandono_carrinho")
-    escrever_hive(funil_entrega(eventos), spark, args.hive_db, "funil_entrega")
-    escrever_hive(pedidos_x_status_atual(eventos), spark, args.hive_db, "pedidos_status_atual")
+    metrics = calcular_product_metrics(raw_logs)
+    escrever_hive(metrics, spark, "product_metrics_batch")
 
     spark.stop()
 
