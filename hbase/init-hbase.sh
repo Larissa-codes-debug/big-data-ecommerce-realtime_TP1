@@ -1,10 +1,18 @@
 #!/bin/bash
+
 set -e
-until nc -z hbase 9090; do
-  echo "Aguardando HBase Thrift..."
-  sleep 2
+
+echo "Aguardando HBase..."
+
+until echo "status" | hbase shell >/dev/null 2>&1
+do
+    sleep 5
 done
-sleep 2
-hbase shell <<'HBASE'
-create 'ecommerce_metrics', 'metrics', 'meta'
-HBASE
+
+echo "HBase disponível."
+
+echo "Criando tabela ecommerce_metrics..."
+
+echo "create 'ecommerce_metrics', 'metrics'" | hbase shell
+
+echo "Tabela criada."

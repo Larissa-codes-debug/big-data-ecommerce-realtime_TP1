@@ -1,76 +1,34 @@
-FROM eclipse-temurin:8-jre-jammy
+FROM eclipse-temurin:8-jre
 
-RUN apt-get update && \
-    apt-get install -y wget procps bash && \
-    rm -rf /var/lib/apt/lists/*
+USER root
 
-# ==================================================
-# APACHE FLUME 1.9.0
-# ==================================================
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       curl \
+       wget \
+       bash \
+       procps \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://archive.apache.org/dist/flume/1.9.0/apache-flume-1.9.0-bin.tar.gz && \
-    tar -xzf apache-flume-1.9.0-bin.tar.gz && \
-    mv apache-flume-1.9.0-bin /opt/flume && \
-    rm apache-flume-1.9.0-bin.tar.gz
-
-# ==================================================
-# HADOOP 3.2.1
-# Mesma versão utilizada pelo HDFS do projeto
-# ==================================================
-
-RUN wget https://archive.apache.org/dist/hadoop/common/hadoop-3.2.1/hadoop-3.2.1.tar.gz && \
-    tar -xzf hadoop-3.2.1.tar.gz && \
-    mv hadoop-3.2.1 /opt/hadoop && \
-    rm hadoop-3.2.1.tar.gz
-
-# ==================================================
-# VARIÁVEIS
-# ==================================================
-
+ENV FLUME_VERSION=1.11.0
 ENV FLUME_HOME=/opt/flume
-ENV HADOOP_HOME=/opt/hadoop
-ENV HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+ENV PATH="${FLUME_HOME}/bin:${PATH}"
 
-ENV PATH="${FLUME_HOME}/bin:${HADOOP_HOME}/bin:${PATH}"
-
-# ==================================================
-# CONFIGURAÇÃO DO FLUME
-# ==================================================
-
-COPY flume.config /opt/flume/conf/flume.conf
-
-# ==================================================
-# DIRETÓRIOS DO FLUME
-# ==================================================
+RUN wget -q https://archive.apache.org/dist/flume/${FLUME_VERSION}/apache-flume-${FLUME_VERSION}-bin.tar.gz \
+    && tar -xzf apache-flume-${FLUME_VERSION}-bin.tar.gz -C /opt \
+    && mv /opt/apache-flume-${FLUME_VERSION}-bin ${FLUME_HOME} \
+    && rm apache-flume-${FLUME_VERSION}-bin.tar.gz
 
 RUN mkdir -p \
     /var/lib/flume/checkpoint-hdfs \
-    /var/lib/flume/checkpoint-backup-hdfs \
     /var/lib/flume/data-hdfs \
     /var/lib/flume/checkpoint-flink \
-    /var/lib/flume/checkpoint-backup-flink \
     /var/lib/flume/data-flink \
     /var/lib/flink-input \
     /var/log/myapp
 
-# ==================================================
-# SCRIPT DE INICIALIZAÇÃO
-# ==================================================
+COPY conf/flume.conf ${FLUME_HOME}/conf/flume.conf
 
-RUN printf '#!/bin/bash\n\
-export FLUME_CLASSPATH="${HADOOP_CONF_DIR}:$(hadoop classpath --glob)"\n\
-echo "HADOOP CLASSPATH configurado"\n\
-echo "$FLUME_CLASSPATH"\n\
-exec flume-ng agent \
---name agent \
---conf /opt/flume/conf \
---conf-file /opt/flume/conf/flume.conf \
--Dflume.root.logger=INFO,console\n' \
-> /usr/local/bin/start-flume.sh && \
-chmod +x /usr/local/bin/start-flume.sh
+WORKDIR ${FLUME_HOME}
 
-# ==================================================
-# INICIA O FLUME
-# ==================================================
-
-CMD ["/usr/local/bin/start-flume.sh"]
+CMD ["flume-ng", "agent", "-n", "agent", "-c", "/opt/flume/conf", "-f", "/opt/flume/conf/flume.conf"]
