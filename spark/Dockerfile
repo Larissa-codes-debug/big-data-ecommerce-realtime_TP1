@@ -10,4 +10,4 @@ COPY jobs/ /opt/spark/jobs/
 
 WORKDIR /opt/spark
 
-CMD ["bash"]
+CMD ["tail", "-f", "/dev/null"]
