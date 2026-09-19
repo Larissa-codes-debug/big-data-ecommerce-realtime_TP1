@@ -1,23 +1,34 @@
 <?xml version="1.0"?>
 <configuration>
+
   <property>
     <name>hbase.rootdir</name>
-    <value>file:///data/hbase</value>
+    <value>hdfs://namenode:8020/hbase</value>
   </property>
+
   <property>
     <name>hbase.cluster.distributed</name>
-    <value>false</value>
+    <value>true</value>
   </property>
+
   <property>
     <name>hbase.unsafe.stream.capability.enforce</name>
     <value>false</value>
   </property>
+
   <property>
     <name>hbase.zookeeper.property.clientPort</name>
     <value>2181</value>
   </property>
+
+  <property>
+    <name>hbase.zookeeper.quorum</name>
+    <value>localhost</value>
+  </property>
+
   <property>
     <name>hbase.master.info.port</name>
     <value>16010</value>
   </property>
+
 </configuration>
