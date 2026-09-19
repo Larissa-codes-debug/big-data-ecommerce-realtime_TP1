@@ -6,7 +6,6 @@ HBASE_CONF="/opt/hbase/conf/hbase-site.xml"
 
 echo "Configurando HBase Init..."
 
-# O ZooKeeper está no container hbase.
 sed -i \
     '/<name>hbase.zookeeper.quorum<\/name>/,/<\/property>/ {
         /<value>/ s#<value>.*</value>#<value>hbase</value>#
@@ -14,6 +13,7 @@ sed -i \
     "$HBASE_CONF"
 
 echo "ZooKeeper configurado para: hbase"
+
 echo "Aguardando HBase..."
 
 until echo "status" | hbase shell -n 2>&1 | grep -q "active master"; do
@@ -23,12 +23,30 @@ done
 
 echo "HBase disponível."
 
-echo "Verificando tabela ecommerce_metrics..."
+echo "Criando tabela ecommerce_metrics..."
 
-until echo "list" | hbase shell -n 2>/dev/null | grep -q "ecommerce_metrics"; do
-    echo "Tabela ainda não está disponível. Aguardando..."
+while true; do
+
+    echo "create 'ecommerce_metrics', 'metrics'" | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
+
+    cat /tmp/hbase-create.log
+
+    if grep -q "Created table ecommerce_metrics" /tmp/hbase-create.log; then
+        echo "Tabela ecommerce_metrics criada com sucesso."
+        break
+    fi
+
+    if grep -q "Table already exists" /tmp/hbase-create.log; then
+        echo "Tabela ecommerce_metrics já existe."
+        break
+    fi
+
+    echo "Master ainda não aceitou a criação. Tentando novamente em 5 segundos..."
     sleep 5
+
 done
 
-echo "Tabela ecommerce_metrics encontrada."
-echo "Inicialização do HBase concluída."
+echo "======================================"
+echo "HBase inicializado com sucesso."
+echo "Tabela: ecommerce_metrics"
+echo "======================================"
