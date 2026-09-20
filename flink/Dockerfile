@@ -13,4 +13,6 @@ RUN pip3 install --no-cache-dir -r /opt/flink/job/requirements.txt
 
 RUN mkdir -p /var/lib/flink-input
 
+RUN pip install --no-cache-dir happybase
+
 USER flink
