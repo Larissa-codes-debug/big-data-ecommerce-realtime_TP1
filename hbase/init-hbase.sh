@@ -23,30 +23,35 @@ done
 
 echo "HBase disponível."
 
-echo "Criando tabela ecommerce_metrics..."
+create_table_if_needed() {
+    local table="$1"
+    local families="$2"
 
-while true; do
+    while true; do
+        echo "create '$table', $families" | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
+        cat /tmp/hbase-create.log
 
-    echo "create 'ecommerce_metrics', 'metrics'" | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
+        if grep -q "Created table $table" /tmp/hbase-create.log; then
+            echo "Tabela $table criada com sucesso."
+            break
+        fi
 
-    cat /tmp/hbase-create.log
+        if grep -q "already exists" /tmp/hbase-create.log; then
+            echo "Tabela $table já existe."
+            break
+        fi
 
-    if grep -q "Created table ecommerce_metrics" /tmp/hbase-create.log; then
-        echo "Tabela ecommerce_metrics criada com sucesso."
-        break
-    fi
+        echo "Master ainda não aceitou a criação de $table. Tentando novamente em 5 segundos..."
+        sleep 5
+    done
+}
 
-    if grep -q "Table already exists" /tmp/hbase-create.log; then
-        echo "Tabela ecommerce_metrics já existe."
-        break
-    fi
-
-    echo "Master ainda não aceitou a criação. Tentando novamente em 5 segundos..."
-    sleep 5
-
-done
+create_table_if_needed "ecommerce_metrics" "'metrics', 'meta', 'alerts'"
+create_table_if_needed "ecommerce_spark_insights" "'insight'"
 
 echo "======================================"
 echo "HBase inicializado com sucesso."
-echo "Tabela: ecommerce_metrics"
+echo "Tabelas:"
+echo "  - ecommerce_metrics (metrics, meta, alerts)"
+echo "  - ecommerce_spark_insights (insight)"
 echo "======================================"

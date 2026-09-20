@@ -209,6 +209,12 @@ services:
       - namenode
       - datanode
       - hive-metastore
+      - hbase-init
+
+    environment:
+      - HBASE_HOST=hbase
+      - HBASE_THRIFT_PORT=9090
+      - HBASE_SPARK_TABLE=ecommerce_spark_insights
 
     volumes:
       - ./spark/jobs:/opt/spark/jobs
@@ -229,5 +235,8 @@ volumes:
 networks:
   bigdata-net:
     driver: bridge
+
+
+
 
 
