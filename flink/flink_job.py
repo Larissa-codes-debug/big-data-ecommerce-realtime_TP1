@@ -88,9 +88,6 @@ def is_finalized_file(filename: str) -> bool:
     if filename.endswith(IGNORED_SUFFIXES):
         return False
 
-    if not filename.endswith(".json"):
-        return False
-
     return True
 
 
@@ -156,7 +153,7 @@ class CompletedJsonFileSource(SourceFunction):
     Esta fonte:
 
     1. Ignora arquivos temporários.
-    2. Lê somente arquivos .json.
+    2. Lê arquivos de dados finalizados, independentemente da extensão.
     3. Não relê o mesmo arquivo.
     4. Aguarda o arquivo ficar estável antes de lê-lo.
     5. Verifica novos arquivos periodicamente.
@@ -193,7 +190,10 @@ class CompletedJsonFileSource(SourceFunction):
             return []
 
         try:
-            filenames = os.listdir(self.input_dir)
+            filenames = []
+            for root, _, names in os.walk(self.input_dir):
+                for name in names:
+                    filenames.append(os.path.relpath(os.path.join(root, name), self.input_dir))
 
         except OSError as exc:
             LOG.error(
@@ -210,10 +210,7 @@ class CompletedJsonFileSource(SourceFunction):
             if not is_finalized_file(filename):
                 continue
 
-            full_path = os.path.join(
-                self.input_dir,
-                filename,
-            )
+            full_path = os.path.join(self.input_dir, filename)
 
             if not os.path.isfile(full_path):
                 continue
