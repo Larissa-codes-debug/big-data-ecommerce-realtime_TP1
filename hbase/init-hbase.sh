@@ -2,32 +2,28 @@
 
 set -e
 
-HBASE_CONF="/opt/hbase/conf/hbase-site.xml"
+echo "======================================"
+echo "HBase Init"
+echo "======================================"
 
-echo "Configurando HBase Init..."
-
-sed -i \
-    '/<name>hbase.zookeeper.quorum<\/name>/,/<\/property>/ {
-        /<value>/ s#<value>.*</value>#<value>hbase</value>#
-    }' \
-    "$HBASE_CONF"
-
-echo "ZooKeeper configurado para: hbase"
+echo "Configuracao do ZooKeeper:"
+grep -A1 "hbase.zookeeper.quorum" /opt/hbase/conf/hbase-site.xml
 
 echo "Aguardando HBase..."
 
 until echo "status" | hbase shell -n 2>&1 | grep -q "active master"; do
-    echo "HBase ainda não está pronto..."
+    echo "HBase ainda nao esta pronto..."
     sleep 5
 done
 
-echo "HBase disponível."
+echo "HBase disponivel."
 
 echo "Criando tabela ecommerce_metrics..."
 
 while true; do
 
-    echo "create 'ecommerce_metrics', 'metrics'" | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
+    echo "create 'ecommerce_metrics', 'metrics'" \
+        | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
 
     cat /tmp/hbase-create.log
 
@@ -36,12 +32,13 @@ while true; do
         break
     fi
 
-    if grep -q "Table already exists" /tmp/hbase-create.log; then
-        echo "Tabela ecommerce_metrics já existe."
+    if grep -q "already exists" /tmp/hbase-create.log; then
+        echo "Tabela ecommerce_metrics ja existe."
         break
     fi
 
-    echo "Master ainda não aceitou a criação. Tentando novamente em 5 segundos..."
+    echo "Master ainda nao aceitou a criacao."
+    echo "Tentando novamente em 5 segundos..."
     sleep 5
 
 done

@@ -19,9 +19,10 @@ from pyflink.datastream import (
 from pyflink.datastream.functions import (
     KeyedProcessFunction,
     ProcessWindowFunction,
-    SourceFunction,
+    MapFunction,
 )
 from pyflink.datastream.state import ValueStateDescriptor
+from pyflink.datastream.connectors.file_system import FileSource, StreamFormat
 from pyflink.datastream.window import SlidingEventTimeWindows, TimeWindow
 
 
@@ -142,190 +143,21 @@ def parse_event_timestamp(event) -> int:
 
 
 # ============================================================
-# SOURCE PERSONALIZADO
+# FONTE NATIVA DE ARQUIVOS DO FLINK 1.18
 # ============================================================
 
-class CompletedJsonFileSource(SourceFunction):
-    """
-    Fonte personalizada para ler arquivos JSON finalizados.
+class JsonEventMapFunction(MapFunction):
+    """Converte uma linha JSON em um evento Python."""
 
-    O Flume escreve arquivos continuamente no diretório.
-    Esta fonte:
+    def map(self, line: str):
+        if line is None:
+            return None
 
-    1. Ignora arquivos temporários.
-    2. Lê arquivos de dados finalizados, independentemente da extensão.
-    3. Não relê o mesmo arquivo.
-    4. Aguarda o arquivo ficar estável antes de lê-lo.
-    5. Verifica novos arquivos periodicamente.
-    """
+        line = line.strip()
+        if not line:
+            return None
 
-    def __init__(
-        self,
-        input_dir: str,
-        poll_interval: int = 2,
-    ):
-        self.input_dir = input_dir
-        self.poll_interval = poll_interval
-        self.running = True
-        self.processed_files = set()
-
-    def cancel(self):
-        """
-        Interrompe a fonte.
-        """
-
-        self.running = False
-
-    def _list_candidate_files(self):
-        """
-        Retorna os arquivos JSON que podem ser processados.
-        """
-
-        if not os.path.exists(self.input_dir):
-            LOG.warning(
-                "Diretório de entrada não existe: %s",
-                self.input_dir,
-            )
-
-            return []
-
-        try:
-            filenames = []
-            for root, _, names in os.walk(self.input_dir):
-                for name in names:
-                    filenames.append(os.path.relpath(os.path.join(root, name), self.input_dir))
-
-        except OSError as exc:
-            LOG.error(
-                "Erro ao listar diretório %s: %s",
-                self.input_dir,
-                exc,
-            )
-
-            return []
-
-        candidates = []
-
-        for filename in filenames:
-            if not is_finalized_file(filename):
-                continue
-
-            full_path = os.path.join(self.input_dir, filename)
-
-            if not os.path.isfile(full_path):
-                continue
-
-            if full_path in self.processed_files:
-                continue
-
-            candidates.append(full_path)
-
-        candidates.sort()
-
-        return candidates
-
-    def _is_file_stable(self, file_path: str) -> bool:
-        """
-        Confirma se o tamanho do arquivo permaneceu igual.
-
-        Isso reduz o risco de ler um arquivo enquanto o Flume
-        ainda está gravando nele.
-        """
-
-        try:
-            first_size = os.path.getsize(file_path)
-
-            time.sleep(0.5)
-
-            second_size = os.path.getsize(file_path)
-
-            return (
-                first_size > 0
-                and first_size == second_size
-            )
-
-        except OSError:
-            return False
-
-    def _read_file(self, file_path: str, ctx):
-        """
-        Lê um arquivo JSON linha por linha.
-        """
-
-        if not self._is_file_stable(file_path):
-            LOG.info(
-                "Arquivo ainda está sendo escrito: %s",
-                file_path,
-            )
-
-            return
-
-        LOG.info(
-            "Processando arquivo finalizado: %s",
-            file_path,
-        )
-
-        try:
-            with open(
-                file_path,
-                "r",
-                encoding="utf-8",
-            ) as file:
-
-                for line_number, line in enumerate(
-                    file,
-                    start=1,
-                ):
-
-                    if not self.running:
-                        return
-
-                    line = line.strip()
-
-                    if not line:
-                        continue
-
-                    event = parse_event(line)
-
-                    if event is None:
-                        continue
-
-                    ctx.collect(event)
-
-            self.processed_files.add(file_path)
-
-            LOG.info(
-                "Arquivo processado com sucesso: %s",
-                file_path,
-            )
-
-        except OSError as exc:
-            LOG.error(
-                "Erro ao ler arquivo %s: %s",
-                file_path,
-                exc,
-            )
-
-    def run(self, ctx):
-        """
-        Executa o loop contínuo de leitura.
-        """
-
-        LOG.info(
-            "Fonte iniciada. Diretório: %s",
-            self.input_dir,
-        )
-
-        while self.running:
-            candidate_files = self._list_candidate_files()
-
-            for file_path in candidate_files:
-                if not self.running:
-                    return
-
-                self._read_file(file_path, ctx)
-
-            time.sleep(self.poll_interval)
+        return parse_event(line)
 
 
 # ============================================================
@@ -613,8 +445,9 @@ class WindowClickAlerts(ProcessWindowFunction):
 
                 last_event_time = event_time
 
-        window_start = context.start
-        window_end = context.end
+        window = context.window()
+        window_start = window.start
+        window_end = window.end
 
         alert_threshold = 10
 
@@ -689,47 +522,56 @@ class WindowClickAlerts(ProcessWindowFunction):
 # ============================================================
 
 def main():
-    env = (
-        StreamExecutionEnvironment
-        .get_execution_environment()
-    )
-
+    env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
 
-    source = env.add_source(
-        CompletedJsonFileSource(
-            input_dir=INPUT_DIR,
-            poll_interval=POLL_INTERVAL_SECONDS,
-        ),
-        type_info=Types.PICKLED_BYTE_ARRAY(),
+    # FileSource nativa do Flink 1.18.1.
+    # Ela lê cada linha dos arquivos e procura continuamente
+    # por novos arquivos no diretório compartilhado com o Flume.
+    file_source = (
+        FileSource
+        .for_record_stream_format(
+            StreamFormat.text_line_format(),
+            INPUT_DIR,
+        )
+        .monitor_continuously(
+            Duration.of_seconds(POLL_INTERVAL_SECONDS)
+        )
+        .build()
     )
 
-    stream = source.assign_timestamps_and_watermarks(
-        WatermarkStrategy
-        .for_bounded_out_of_orderness(
-            Duration.of_seconds(15)
-        )
-        .with_timestamp_assigner(
-            EventTimestampAssigner()
-        )
+    raw_stream = env.from_source(
+        file_source,
+        WatermarkStrategy.no_watermarks(),
+        "ecommerce-file-source",
     )
 
     events = (
-        stream
+        raw_stream
+        .map(
+            JsonEventMapFunction(),
+            output_type=Types.PICKLED_BYTE_ARRAY(),
+        )
         .filter(
-            lambda event: event is not None
+            lambda event: event is not None,
+        )
+        .assign_timestamps_and_watermarks(
+            WatermarkStrategy
+            .for_bounded_out_of_orderness(
+                Duration.of_seconds(15)
+            )
+            .with_timestamp_assigner(
+                EventTimestampAssigner()
+            )
         )
     )
 
     # --------------------------------------------------------
     # FLUXO 1: MÉTRICAS ACUMULADAS POR PRODUTO
     # --------------------------------------------------------
-
     (
         events
-        .key_by(
-            lambda event: event["product_id"]
-        )
+        .key_by(lambda event: event["product_id"])
         .process(
             UpdateMetrics(),
             output_type=Types.PICKLED_BYTE_ARRAY(),
@@ -740,18 +582,12 @@ def main():
     # --------------------------------------------------------
     # FLUXO 2: ALERTAS EM JANELAS DESLIZANTES
     # --------------------------------------------------------
-
     (
         events
         .filter(
-            lambda event: (
-                event.get("event_type")
-                == "click"
-            )
+            lambda event: event.get("event_type") == "click"
         )
-        .key_by(
-            lambda event: event["product_id"]
-        )
+        .key_by(lambda event: event["product_id"])
         .window(
             SlidingEventTimeWindows.of(
                 Time.minutes(5),
@@ -765,9 +601,7 @@ def main():
         .print()
     )
 
-    env.execute(
-        "ecommerce-flink-to-hbase"
-    )
+    env.execute("ecommerce-flink-to-hbase")
 
 
 if __name__ == "__main__":
