@@ -10,6 +10,10 @@ from pyspark.sql.functions import (
 spark = (
     SparkSession.builder
     .appName("EcommerceETL")
+    .config(
+        "spark.sql.warehouse.dir",
+        "hdfs://namenode:8020/user/hive/warehouse"
+    )
     .enableHiveSupport()
     .getOrCreate()
 )
