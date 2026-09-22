@@ -22,7 +22,7 @@ echo "Criando tabela ecommerce_metrics..."
 
 while true; do
 
-    echo "create 'ecommerce_metrics', 'metrics'" \
+    echo "create 'ecommerce_metrics', 'metrics', 'meta', 'alert'" \
         | hbase shell -n > /tmp/hbase-create.log 2>&1 || true
 
     cat /tmp/hbase-create.log

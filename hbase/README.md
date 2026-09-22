@@ -1,15 +1,15 @@
-# HBase - métricas do e-commerce
+# HBase - métricas e alertas do e-commerce
 
-A tabela `ecommerce_metrics` recebe os resultados processados pelo Flink.
+A tabela `ecommerce_metrics` recebe as métricas acumuladas e os alertas processados pelo Flink.
 
-- Row key: `product_id`
-- Column family `metrics`: cliques, adições ao carrinho, checkouts, valor e entregas concluídas.
-- Column family `meta`: categoria e dados do último evento processado.
+- Row key de métricas: `product_id`
+- Row key de alertas: `alert|product_id|window_start|window_end`
+- Column families: `metrics`, `meta` e `alert`
 
 Consulta:
 
 ```bash
-docker exec -it hbase hbase shell
+docker compose exec hbase hbase shell
 scan 'ecommerce_metrics'
 get 'ecommerce_metrics', 'prod-001'
 ```
