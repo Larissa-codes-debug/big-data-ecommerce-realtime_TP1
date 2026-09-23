@@ -200,7 +200,7 @@ services:
       - HBASE_HOST=hbase
       - HBASE_THRIFT_PORT=9090
       - HBASE_TABLE=ecommerce_metrics
-      - FLINK_INPUT_DIR=/var/lib/flink-input
+      - FLINK_INPUT_DIR=/var/lib/flink-input/ready
 
     depends_on:
       - flink-jobmanager
@@ -224,7 +224,7 @@ services:
       - HBASE_HOST=hbase
       - HBASE_THRIFT_PORT=9090
       - HBASE_TABLE=ecommerce_metrics
-      - FLINK_INPUT_DIR=/var/lib/flink-input
+      - FLINK_INPUT_DIR=/var/lib/flink-input/ready
 
     depends_on:
       - flink-jobmanager
@@ -240,6 +240,31 @@ services:
       - bigdata-net
 
     restart: "no"
+
+
+  # ============================================================
+  # FINALIZADOR DE ARQUIVOS PARA O FLINK
+  # Move somente arquivos estáveis do staging para ready.
+  # ============================================================
+
+  flink-file-finalizer:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+
+    container_name: flink-file-finalizer
+    command: ["/opt/flink/job/finalize_files.sh"]
+
+    volumes:
+      - flink_input:/var/lib/flink-input
+
+    depends_on:
+      - flume
+
+    networks:
+      - bigdata-net
+
+    restart: unless-stopped
 
 
   # ============================================================

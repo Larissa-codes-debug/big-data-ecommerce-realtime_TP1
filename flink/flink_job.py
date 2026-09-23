@@ -39,7 +39,7 @@ LOG = logging.getLogger("ecommerce-flink")
 
 INPUT_DIR = os.getenv(
     "FLINK_INPUT_DIR",
-    "/var/lib/flink-input",
+    "/var/lib/flink-input/ready",
 )
 
 HBASE_HOST = os.getenv(
