@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
-set -e
-docker compose exec -T flink-jobmanager flink run -d -py /opt/flink/job/flink_job.py
+set -euo pipefail
+
+echo "A submissão automática é feita pelo serviço flink-job."
+echo "Use: docker compose logs -f flink-job"
+echo "Para consultar os jobs: docker compose exec -T flink-jobmanager flink list -m flink-jobmanager:8081"
