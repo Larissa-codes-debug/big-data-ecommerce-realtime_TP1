@@ -234,22 +234,7 @@ services:
     volumes:
       - flink_input:/var/lib/flink-input
 
-    command: >-
-      bash -c '
-      set -e;
-      until /opt/flink/bin/flink list -m flink-jobmanager:8081 >/dev/null 2>&1;
-      do
-        echo "Aguardando JobManager...";
-        sleep 3;
-      done;
-      /opt/flink/bin/flink run -d
-      -m flink-jobmanager:8081
-      -pyexec python3
-      -pyclientexec python3
-      -py /opt/flink/job/flink_job.py;
-      echo "Job Flink submetido com sucesso.";
-      sleep infinity
-      '
+    command: ["/opt/flink/job/submit_job.sh"]
 
     networks:
       - bigdata-net
